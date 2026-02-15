@@ -1,0 +1,130 @@
+---
+title: "MIT Election Data + Science Hiring Exercise"
+author: "Salma Khalfallah"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=TRUE}
+set.seed(1)
+library(tidyverse)
+library(stringr)
+library(knitr)
+
+opts_chunk$set(echo = TRUE)
+
+# QUESTION 1
+part1_data <- read.csv("part1_data.csv")
+part1_fips <- read.csv("part1_fips.csv")
+
+# merging with fips dataset
+part1_data_merged <- merge(part1_data, part1_fips, by.x = "ReportingCountyName", by.y = "county_name")
+```
+
+# Data Wrangling
+
+## Question 1
+
+When performing initial data wrangling, I first chose to merge the datasets `part1_data.csv` and `part1_fips.csv` by county names to obtain the county FIPS scores, integral to the final result. Following the codebook, the following variables must be included in the final data frame:
+
+1. `precinct`: The string ID of the smallest election reporting unit of a state. For the state of Indiana, as the variable name suggests, this is a precinct. Specifically, Indiana is composed of 92 counties. Within these counties are *townships*. As I am a native Texan, this was a new terminology to me that required some research: civil townships are simply sub-divisions of state counties that serve as individual units of local government with their own local governing board and public operations. Indiana is compromised of $1,008$ townships, and within those townships are precincts; these are the smallest electoral reporting unit for the state of Indiana. Regarding the data set, it is important to note that these lowest levels are distinctly marked using the `DataEntryLevelName` variable. In my initial assessment, I made the mistake of assuming that every single precinct in the state of Indiana contained some identifying name and then a name. (ex: `Clark-1`) While this is true for almost every single data point, there remains an exception: the Ceasar Creek township. While this is a township, upon further [research](https://www.in.gov/sos/elections/files/CongressionalDistrictVoterStatusCountsPrecinct9.pdf?), this town remains small enough to where it *is* its own electoral precinct, therefore making it the smallest electoral reporting unit of its region. I have since updated the cleaned data set accordingly. 
+
+2. `office`: this is simply the name of the elected position for the race. This is standardized, in the format of: `[LEVEL] [POSITION]` (i.e. `US PRESIDENT`, `STATE SENATE`, etc.). In our case, every single observation is for one race: the U.S. Presidential campaign. Therefore, it sufficed in this instance to set the office to be `US PRESIDENT`.
+
+```{r, Data Wrangling: Office count}
+unique(part1_data_merged$Office)
+```
+
+3. `party_detailed`: This is the upper case party name for a given party, following a standardized format.
+
+4. `party_simplified`: This is the upper case party name for a given party, *except* any less popular parties would go into an ominous `OTHER` category.
+
+```{r, Data Wrangling: Popular Parties}
+# vector of popular population parties, used when creating the party variables
+popular_parties <- c("DEMOCRAT", "REPUBLICAN", "INDEPENDENT", "LIBERTARIAN")
+```
+
+5. `votes`: this is number of votes for a given entry. It was notable to include that this vector was not in fact a numeric vector, and had to be adjusted during clean-up (see: Question 2)
+
+6. `county_name`
+
+7. `county_fips`: this is the FIPS code asssociated with the county of the each entry, structured so that the first two digits are the state FIPS and the last three are the unique county identification
+
+8. `jurisdiction_name`: the jurisdiction name in upper case. Since this is the state of Indiana, this is the equivalent to the county name (see: point 6)
+
+9. `candidate`: the candidate's name, using standardized notation (all upper case lettering)
+
+10. `year`: the year of the election. It's important to note that every single entry in this data frame was from within the 2024 U.S. General election. Hence, as the name suggests, every entry will be within the year of 2024. 
+
+```{r, Data Wrangling}
+unique(part1_data_merged$Election)
+```
+
+11. `stage`: the stage of the election, can be `PRI` for primary, `GEN` for general, or `RUNOFF` for a runoff election. (See: question 10)
+
+12. `state`: the state in which elections occurred. Since we are dealing with local Indiana election data, every entry will be `INDIANA`.
+
+13. `special`: An indicator for whether the election was a special election, "TRUE" if special, "FALSE" for non-special. Since every entry is from a general election, this will be `FALSE`.
+
+14. `writein`: An indicator for whether the candidate was a write in, "TRUE" if write in, "FALSE" otherwise. This required some... manipulation of data. (see: Final Code chunk for data wrangling as well as Question 2)
+
+15. `date`: The date of the primary/election. The general elections occurred on `2024-11-05`, thus this will be our data across all entries.
+
+The final code for clean-up and data frame can be viewed below:
+
+```{r, Data Wrangling: Final Chunk}
+## PART ONE: Wrangling
+
+# cleaned data set
+part1_cleaned <- part1_data_merged |>
+  select("DataEntryJurisdictionName", "DataEntryLevelName", "Office", "PoliticalParty", "TotalVotes", "ReportingCountyName", "county_fips", 
+         "NameonBallot", "Election") |> # selecting necessary columns from original dataset
+  filter(DataEntryLevelName == "Precinct") |> # smallest electoral reporting unit!
+  mutate(Office = recode(Office, 
+                         "US President & Vice President" = "US PRESIDENT")) |> # notice: all of the office values are for US President, no need to recode multiple times
+  rename("office" = Office) |> # renaming using naming convention
+  rename("party_detailed" = PoliticalParty) |> # renaming using naming convention
+  rename("precinct" = DataEntryJurisdictionName) |> # renaming using naming convention
+  mutate(party_detailed = recode(party_detailed, 
+                           "Democratic" = "DEMOCRAT",
+                           .default = str_to_upper(party_detailed)
+                           )) |> # this code is changing the party values for naming convention, capitalizing everything
+  mutate(party_simplified = if_else(party_detailed %in% popular_parties, 
+                                    party_detailed,
+                                    "OTHER")) |> # using the same naming convention for popular parties, otherwise using OTHER. there are no NA values in this dataset
+  rename("votes" = TotalVotes) |> # renaming using naming convention
+  mutate(votes = as.numeric(votes)) |> # changing the votes variable to a numeric value
+  rename("county_name" = ReportingCountyName) |>  # renaming using naming convention
+  mutate(jurisdiction_name = county_name) |> # in the state of indiana, the jurisdiction name is the county name - no need to use a different name
+  mutate(write_in = str_detect(NameonBallot, "W/I")) |> # counting the instances of the (W/I) string bit in the candidate variable of each observation
+  mutate(candidate = str_split(NameonBallot, " & ", simplify = TRUE)[,1]) |> # removing the vice president candidates from the ballot, only keeping the presidential candidate (per codebook instructions)
+  mutate(candidate = str_remove(candidate, "\\(W/I\\)")) |> # removing the (W/I) string bit from the presidential candidate string (we have no more of a need for it)
+  mutate(candidate = str_to_upper(candidate)) |> # renaming using naming convention
+  mutate(year = "2024") |> # every observation in the dataset is the 2024 general elections, no need for additional code in this instance
+  mutate(stage = "GEN") |> # see: above
+  mutate(special = FALSE) |> # see: above
+  mutate(state = "INDIANA") |> # indiana election data
+  mutate(date = as.Date("2024-11-05")) |> # see: above
+  select(-NameonBallot, -Election, -DataEntryLevelName) # removing unnecessary elements from the dataframe
+
+# re-ordering columns by codebook order
+part1_cleaned <- part1_cleaned |>
+  select(precinct, office, party_detailed, party_simplified, votes, county_name, county_fips, jurisdiction_name, candidate, year, stage, special, write_in, date)
+
+rmarkdown::paged_table(part1_cleaned)
+```
+
+## Question 2
+
+While performing clean-up, I ran into multiple issues with the quality of the data with respect to data standardization and data loss that could be potentially easily preventable based on data quality standardization.
+
+1. Observation #322: While cleaning up the initial data, I identified a weird observation that leads to some data loss:
+
+```{r, Question 2: Obs. 322}
+rmarkdown::paged_table(part1_data[322,])
+```
+
+Upon inspection, it seems as if this single observation has been shifted column-wise twice over, leading to crucial data loss. Specifically
+
+2. (W/I) being WEIRD
+3. WHY ARE THE NUMBER !!! OF VOTES NOT NUMERIC??????? 
